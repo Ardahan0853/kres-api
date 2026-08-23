@@ -1,0 +1,291 @@
+# kres-api
+
+Kreş & anaokulu veli iletişim SaaS'ının backend'i. Laravel 13 + PostgreSQL + Sanctum.
+
+Bu depo `adim-04-api-mobil-baglantisi.md` dosyasının **Bölüm A** kapsamındadır.
+Mobil uygulama ayrı depoda: `kres-mobile`.
+
+## Çalıştırma
+
+PostgreSQL bu makinede taşınabilir kurulumdur ve Windows servisi olarak
+kayıtlı değildir; bilgisayarı her yeniden başlattığında elle açman gerekir:
+
+```
+C:\Work\pgsql\start-pg.cmd     # durdurmak icin stop-pg.cmd
+```
+
+Sonra API:
+
+```
+php artisan serve --host=0.0.0.0
+```
+
+`--host=0.0.0.0` şart. Aksi halde sunucu yalnızca 127.0.0.1'i dinler ve
+telefon/emülatör `192.168.1.2:8000` adresine bağlanamaz.
+
+> **Sunucuyu değiştirdikten sonra yeniden başlat.** `artisan serve` alt
+> sürece yalnızca izin listesindeki ortam değişkenlerini geçirir ve
+> `TEMP`/`TMP` o listede yoktur. Windows'ta PHP bu ikisi olmadan yazılabilir
+> geçici dizin bulamaz; geçici dosyaya alınması gereken her istek gövdesi
+> (~8 KB üstü, yani her gerçek fotoğraf) `Unable to create temporary file`
+> ile **500** döner. `AppServiceProvider::boot()` bu ikisini listeye ekler,
+> ama düzeltme ancak sunucu yeniden başlatıldığında etkili olur.
+
+Veritabanını sıfırlayıp yeniden doldurmak için:
+
+```
+php artisan migrate:fresh --seed
+```
+
+## Veritabanı
+
+| | |
+|---|---|
+| Sunucu | 127.0.0.1:5432 |
+| Veritabanı | `kres_dev` |
+| Kullanıcı | `postgres` / `postgres` |
+
+Tüm alan tabloları UUID birincil anahtar kullanır. Sanctum'un
+`personal_access_tokens.tokenable_id` kolonu da bu yüzden `uuidMorphs` ile
+tanımlandı.
+
+## Test hesapları
+
+Hepsinin şifresi `password`.
+
+| E-posta | Rol | Sınıflar |
+|---|---|---|
+| `admin@papatya.test` | admin | (kurumun tamamını görür) |
+| `ayse@papatya.test` | teacher | Papatyalar, Laleler |
+| `mehmet@papatya.test` | teacher | Menekşeler |
+
+Ayrıca izolasyon testi için ikinci bir kurum vardır: **Test Kurum 2**
+(Kelebekler sınıfı, 5 çocuk). Papatya kullanıcılarının hiçbir uç noktada
+bu veriyi görmemesi gerekir.
+
+## Uç noktalar
+
+Hepsi `/api/v1` altında. `auth/login` dışındakiler Sanctum korumalı.
+
+| Metot | Yol | Açıklama |
+|---|---|---|
+| POST | `auth/login` | `email`, `password`, `device_name` → `{token, user}` |
+| POST | `auth/logout` | Yalnızca o isteğin token'ını siler → 204 |
+| GET | `me` | `{data: {...user}}` |
+| GET | `classrooms` | Öğretmenin atandığı sınıflar; admin ise kurumun tamamı. `day_sent_at` içerir |
+| POST | `classrooms/{classroom}/day-send` | Sınıfın gününü gönderir |
+| GET | `classrooms/{classroom}/children` | Atanmamış öğretmene 403, `photo_consent` içerir |
+| POST | `records` | Günlük kayıt yazar. Idempotent, aşağıya bak |
+| POST | `records/batch` | `{records: [...]}`, en fazla 200 kayıt, her zaman 200 döner |
+| POST | `photos/upload-url` | Kısa ömürlü imzalı yükleme adresi |
+| POST | `photos` | Yüklenen fotoğrafı kesinleştirir |
+
+## Kayıtlar
+
+Mobil uygulama çevrimdışı çalışır: öğretmenin girdiği kayıt önce cihazdaki
+SQLite kuyruğuna yazılır, ağ geldiğinde gönderilir. Bu iki sonucu doğurur.
+
+**Kayıt id'sini istemci üretir (UUIDv7).** Kötü bağlantıda zaman aşımına düşen
+bir istek aslında sunucuya ulaşmış olabilir, kuyruk da onu tekrar gönderir.
+Bu yüzden yazma idempotenttir: aynı id ikinci kez geldiğinde yeni satır
+açılmaz, mevcut kayıt güncellenir ve 200 döner. **Kazanan son gönderimdir.**
+
+Bu bir tercih değil, ürünün akışı: öğretmenin ikinci dokunuşu seçimini
+değiştirir (12:05'te "Yedi", 12:15'te "Az yedi") ve uyku kaydı aynı id'ye
+`ended_at` eklenerek kapanır. İlk değeri korusaydık cihazda "Az yedi"
+görünürken veliye "Yedi" giderdi.
+
+Güncellemede yalnızca `value` ve `recorded_at` değişir. Kaydın sınıfı,
+çocuğu ve türü sabittir; bunları değiştiren bir gövde 422 alır. `created_at`
+ilk yazma anında kalır, `updated_at` tazelenir.
+
+**Gecikmiş istek koruması.** İstemcide zaman aşımına düşen bir istek ağda
+hâlâ yolda olabilir. Bu sırada öğretmen seçimini değiştirirse düzeltme
+sunucuya önce varır ve gecikmiş eski istek onun üzerine yazabilirdi. Bu
+yüzden saklanandan **kesin daha eski** `recorded_at` taşıyan gövde yok
+sayılır; yanıt yine 200'dür (4xx dönseydik istemci o kaydı sonsuza kadar
+tekrar denerdi), `batch` içinde sonucu `stale` görünür.
+
+Eşit `recorded_at` **uygulanır**. İstemcinin "5 sn geri al" akışı önceki
+değeri kendi eski damgasıyla geri yazar; eşitlikte reddetseydik geri alma
+sunucuya hiç işlemezdi.
+
+**`recorded_at` olayın gerçek zamanıdır, sunucu saati değildir.** Öğretmen
+09:12'de yoklama alıp 14:00'te ağa kavuşabilir; veliye 09:12 görünmelidir.
+Sunucunun kaydı teslim aldığı an ayrıca `created_at` içinde tutulur.
+
+Durum kodları istemcinin kuyruk davranışını doğrudan belirler:
+
+| Kod | Anlamı | İstemci ne yapar |
+|---|---|---|
+| 201 | Yeni kayıt yazıldı | `synced` |
+| 200 | Kayıt zaten vardı, güncellendi | `synced` |
+| 401 | Token geçersiz | Kuyruk susar, giriş ekranı |
+| 403 | Öğretmen o sınıfa atanmamış | Kalıcı hata, tekrar denemez |
+| 409 | id başka kuruma ait | Kalıcı hata |
+| 422 | Gövde hatalı (tür, sınıf, çocuk) | Artan beklemeyle tekrar dener |
+
+Bu uç **hiçbir zaman 404 dönmez**. İstemci 404'ü "uç henüz yok" olarak
+yorumlayıp kaydı kuyrukta bekletir; bu yüzden bilinmeyen sınıf veya çocuk
+404 değil 422 üretir.
+
+`records/batch` zarf geçerliyse her zaman 200 döner ve kayıt başına sonuç
+listeler. Tek bozuk kayıt yüzünden 422 dönmek kuyruktaki diğer 49 sağlam
+kaydı da reddedeceği için, doğrulama kayıt başına yapılır. İstemci HTTP
+koduna değil, kendi id'sinin satırına bakmalıdır:
+
+```json
+{"results": [
+  {"id": "...", "index": 0, "status": 201, "result": "created"},
+  {"id": "...", "index": 1, "status": 200, "result": "duplicate"},
+  {"id": "...", "index": 2, "status": 422, "result": "invalid", "message": "..."}
+]}
+```
+
+`value` alanı tip başına değişen serbest JSON'dur (`jsonb`) ve **bilerek
+doğrulanmaz**. Şekiller sonraki adımlarda genişleyeceği için katı doğrulama
+istemci ile sunucu arasında sürüm uyumsuzluğu üretir. `type` ise sabit
+listeye göre doğrulanır: `attendance`, `meal`, `nap`, `toilet`, `note`,
+`photo`. Listeye yeni tür eklemek backend değişikliği gerektirir.
+
+Mobil istemcinin gönderdiği şekiller (sözleşme belgesi, doğrulanmaz):
+
+```
+attendance  {"present": true}                                  false = gelmedi
+meal        {"meal": "breakfast"|"lunch",
+             "amount": "all"|"some"|"none"}                    all=Yedi, some=Az yedi, none=Yemedi
+nap         {"started_at": "ISO", "ended_at": "ISO"|null}
+toilet      {"kind": "toilet"|"diaper"}
+```
+
+- Öğün yalnızca kahvaltı ve öğledir, `snack` yoktur.
+- Uyku **tek kayıttır**: "Uyudu" kaydı açar, "Uyandı" aynı id'ye `ended_at`
+  ekler. Çocuk ikinci kez uyursa yeni id ile yeni kayıt açılır.
+- Tuvalet/bez her dokunuşta ayrı kayıttır; günlük sayaç istemcide üretilir.
+- Yoklamada `present: false` de bir kayıttır. Kaydın yokluğu "işaretlenmedi"
+  demektir; üçü farklı durumdur.
+
+Kayıtlar istemcide 5 saniye bekletilerek gönderilir ("geri al" penceresi),
+bu yüzden art arda yapılan işaretlemeler genelde tek `batch` isteğiyle gelir.
+
+> PostgreSQL bağlantısı `config/database.php` içinde `'timezone' => 'UTC'`
+> ile sabitlenmiştir. Laravel timestamp'i offset'siz yazdığı için, oturum
+> saat dilimi UTC değilse `timestamptz` kolonlara yazılan saatler makinenin
+> yerel dilimine göre kayar (bu makinede 3 saat). `recorded_at` için bu kayma
+> kabul edilemez.
+
+## Fotoğraf izni
+
+`children.photo_consent` üç değer alır: `granted`, `denied`, `pending`.
+Varsayılan `pending`'dir — izin alınmamış saymak güvenli olandır. Alan
+`GET /classrooms/{classroom}/children` yanıtında döner.
+
+Yalnızca `granted` olan çocuk fotoğrafta etiketlenebilir. Bu kural sunucuda
+da uygulanır; tek savunma hattı istemci değildir.
+
+Seeder her sınıfta **en az bir `denied` ve bir `pending`** bırakır
+(`Child::consentForIndex()`), aksi halde izin akışı gerçekten denenemez.
+Aynı kural, alanı ekleyen migration'da mevcut satırlar için de uygulanır:
+`migrate:fresh` istemcideki id'leri ve oturumları düşürdüğü için veri
+bozulmadan yerinde dağıtılır.
+
+## Fotoğraflar
+
+Üç adım vardır, üçü de birbirinden bağımsız tekrar denenebilir:
+
+1. `POST photos/upload-url` → kısa ömürlü imzalı adres (10 dk)
+2. `PUT <imzalı adres>` → dosyanın kendisi
+3. `POST photos` → kaydın kesinleştirilmesi
+
+İkinci adımı **Laravel'in kendi storage rotası** karşılar; uygulama kodu
+dosyaya dokunmaz. Yerel disk sürücüsü `temporaryUploadUrl()` desteklediği
+için MinIO/S3 kurmadan çalışır (`local` diskinde `'serve' => true`).
+Üretimde `FILESYSTEM_DISK=s3` yeterlidir; istemci akışı değişmez.
+
+> Yükleme rotası **yalnızca imzayı** doğrular — içerik türüne ve boyuta
+> bakmaz, gövdede ne gelirse o anahtara yazar. Bu yüzden gerçek denetim
+> 3. adımdadır: dosyanın diskteki asıl boyutuna ve JPEG olup olmadığına
+> (magic byte) orada bakılır. `upload-url` aşamasındaki `content_type` ve
+> `byte_size` doğrulaması erken uyarıdır, güvenlik sınırı değildir.
+
+`upload_url` adresinin host'u **isteğin host'undan** üretilir, `APP_URL`'den
+değil. Telefon `192.168.1.x:8000` üzerinden istediğinde adres de o host ile
+döner, yani doğrudan erişilebilir.
+
+`storage_key` istemcinin ürettiği id'den türetilir
+(`photos/{institution_id}/{photo_id}.jpg`), bu yüzden adres kaç kez
+istenirse istensin aynıdır. Kesinleştirmede gövdedeki `storage_key` beklenen
+değerle karşılaştırılır; başkasının dosyası sahiplenilemez.
+
+`taken_at` fotoğrafın **çekildiği** andır, sunucunun aldığı an değil —
+`records.recorded_at` ile aynı mantık.
+
+Etiketlenen çocukların hepsi o sınıfa ait olmalı ve `photo_consent` değeri
+`granted` olmalıdır. Değilse 422 döner ve sorunlu id'ler yanıtta listelenir:
+
+```json
+{
+  "message": "Fotoğraf izni olmayan çocuk etiketlenemez.",
+  "errors": {"child_ids": ["Fotoğraf izni olmayan çocuk etiketlenemez."]},
+  "blocked_child_ids": ["...", "..."]
+}
+```
+
+`child_ids` boş dizi olabilir (etiketsiz sınıf fotoğrafı), ama alanın kendisi
+gövdede bulunmalıdır.
+
+### Sahipsiz dosyalar
+
+Yükleme ile kesinleştirme ayrı adımlar olduğu için dosya diske yazılıp
+`POST photos` hiç gelmeyebilir. Bu dosyaların satırı yoktur ve kendiliğinden
+gitmezler:
+
+```
+php artisan photos:prune --hours=48        # varsayılan 48 saat
+php artisan photos:prune --dry-run         # yalnızca ne silineceğini yaz
+```
+
+Kesinleştirilmiş dosyalar ve eşikten yeni dosyalar korunur — kuyruk saatlerce
+çevrimdışı bekleyebildiği için eşik geniş tutulmuştur.
+
+## Günü gönderme
+
+`POST classrooms/{classroom}/day-send` sınıfın bir gününü gönderilmiş olarak
+işaretler ve o andaki özeti kaydeder. **Veliye gerçek bildirim göndermez** —
+veli tarafı ayrı bir adımdır.
+
+İki farklı tekrar durumu vardır ve **ikisi de 200 döner**:
+
+- aynı `id` → kuyruk aynı isteği tekrar gönderdi
+- aynı gün, farklı `id` → öğretmen ikinci kez bastı
+
+İkincisine **409 dönülmez**: istemci 409'u kalıcı ret sayıp öğretmene
+"gönderilemedi" derdi, hâlbuki gün gitmiştir. Bir sınıfın bir günü
+`unique(classroom_id, day)` ile tek kayıttır.
+
+`requested_at` butona basıldığı andır, `sent_at` sunucunun işlediği an —
+ikisi ayrı tutulur. `day` öğretmenin **yerel takvim günüdür** (`YYYY-MM-DD`)
+ve UTC'ye çevrilmez.
+
+Özeti sunucu hesaplar. `photo_count` istek anında elde ne varsa onu sayar;
+fotoğraflar ayrı kuyrukta olduğu için sonradan gelen fotoğraf sayıyı
+değiştirebilir. `parent_count` şimdilik **null** döner — bu şemada henüz veli
+verisi yoktur ve uydurma sayı dönmek yanlış olurdu.
+
+`GET classrooms` yanıtındaki `day_sent_at`, o sınıfın **bugüne** ait gönderimi
+varsa damgasıdır, yoksa `null`. Sınıf kartındaki "✓ Gönderildi" şeridi bunu
+kullanır.
+
+> `day` bir tarih kolonudur ama sürücüye göre saat bilgisiyle saklanabilir;
+> bu yüzden gün karşılaştırmaları `whereDate` ile yapılır. Düz eşitlik
+> PostgreSQL'de çalışıp SQLite'ta sessizce boş dönüyordu.
+
+## Kurum izolasyonu
+
+`App\Models\Concerns\BelongsToInstitution` trait'i `Classroom` ve `Child`
+modellerine global scope ekler. Kurum kimliği **hiçbir zaman** URL'den veya
+request gövdesinden okunmaz, yalnızca `auth()->user()->institution_id`
+üzerinden gelir.
+
+Scope, kimlik doğrulanmamış bağlamda (seeder, tinker, konsol) devre dışı
+kalır. Tüm uç noktalar Sanctum ile korunduğu için bu durum API'ye açılmaz.
