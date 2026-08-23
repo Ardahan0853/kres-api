@@ -7,7 +7,9 @@ use App\Models\Classroom;
 use App\Models\Institution;
 use App\Models\Record;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -428,6 +430,60 @@ class RecordTest extends TestCase
     public function test_token_yoksa_401_doner(): void
     {
         $this->postJson('/api/v1/records', $this->payload())->assertStatus(401);
+    }
+
+    public function test_turetilmis_kolonlar_value_ile_dolar(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        // Web paneli value->>'amount' yerine meal_amount yazabilsin diye
+        // turetilmis kolonlar var. Ifadeleri motora gore ayrildigi icin
+        // (PostgreSQL ile SQLite ayni sonucu vermiyor) testle korunuyor.
+        $this->postJson('/api/v1/records', $this->payload([
+            'type' => 'meal',
+            'value' => ['meal' => 'lunch', 'amount' => 'all'],
+        ]))->assertStatus(201);
+
+        $this->postJson('/api/v1/records', $this->payload([
+            'id' => (string) Str::uuid7(),
+            'type' => 'attendance',
+            'value' => ['present' => false],
+        ]))->assertStatus(201);
+
+        $this->postJson('/api/v1/records', $this->payload([
+            'id' => (string) Str::uuid7(),
+            'type' => 'toilet',
+            'value' => ['kind' => 'diaper'],
+        ]))->assertStatus(201);
+
+        $this->assertSame(1, DB::table('records')
+            ->where('meal_kind', 'lunch')->where('meal_amount', 'all')->count());
+
+        $this->assertSame(1, DB::table('records')
+            ->where('toilet_kind', 'diaper')->count());
+
+        // present iki motorda da boolean gibi karsilastirilabilmeli.
+        $this->assertSame(1, DB::table('records')->where('present', false)->count());
+        $this->assertSame(0, DB::table('records')->where('present', true)->count());
+
+        // Ilgisiz tipte kolon bos kalir.
+        $this->assertSame(2, DB::table('records')->whereNull('meal_amount')->count());
+    }
+
+    public function test_turetilmis_kolona_yazilamaz(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $this->postJson('/api/v1/records', $this->payload([
+            'type' => 'meal',
+            'value' => ['meal' => 'lunch', 'amount' => 'all'],
+        ]))->assertStatus(201);
+
+        // Kolonlar yalnizca value'dan turetilir; dogrudan yazma denemesi
+        // veritabani tarafindan reddedilmeli ki iki kaynak ayrisamasin.
+        $this->expectException(QueryException::class);
+
+        DB::table('records')->update(['meal_amount' => 'hile']);
     }
 
     public function test_toplu_gonderimde_her_kayit_kendi_sonucunu_alir(): void

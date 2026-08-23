@@ -142,6 +142,39 @@ koduna değil, kendi id'sinin satırına bakmalıdır:
 ]}
 ```
 
+### Türetilmiş kolonlar
+
+Web panelinin `value->>'amount'` yazmak zorunda kalmaması için `value`
+içindeki alanlar **generated column** olarak da açıldı:
+
+| kolon | kaynak | tip |
+|---|---|---|
+| `present` | `value->>'present'` | boolean |
+| `meal_kind` | `value->>'meal'` | text |
+| `meal_amount` | `value->>'amount'` | text |
+| `nap_started_at` | `value->>'started_at'` | text (ISO 8601) |
+| `nap_ended_at` | `value->>'ended_at'` | text (ISO 8601) |
+| `toilet_kind` | `value->>'kind'` | text |
+
+Gerçek kolon gibi sorgulanır ve indekslenebilir:
+
+```sql
+select * from records where type = 'meal' and meal_amount = 'all';
+select count(*) filter (where present) from records where type = 'attendance';
+```
+
+Yazma yolu değişmez: kolonlar `value`'dan türetilir, uygulama onlara yazmaz
+ve **yazamaz** — doğrudan `update` denemesini veritabanı reddeder, böylece
+iki kaynak ayrışamaz. Şekil değişirse kolon düşürülüp yeniden tanımlanır,
+`value` olduğu gibi kaldığı için veri kaybolmaz.
+
+> İfadeler motora göre ayrılır: PostgreSQL'de `->>` bir JSON boolean için
+> `'true'/'false'`, SQLite'ta `'1'/'0'` döner. `present` iki motorda da
+> boolean gibi karşılaştırılabilsin diye ayrı yazıldı; bu davranış testle
+> korunuyor. Zaman alanları metin bırakıldı çünkü PostgreSQL türetilmiş
+> kolonda `text -> timestamptz` cast'ini kabul etmiyor (immutable değil);
+> ISO 8601 damgaları sözlük sırasında da kronolojik sıralanır.
+
 `value` alanı tip başına değişen serbest JSON'dur (`jsonb`) ve **bilerek
 doğrulanmaz**. Şekiller sonraki adımlarda genişleyeceği için katı doğrulama
 istemci ile sunucu arasında sürüm uyumsuzluğu üretir. `type` ise sabit
