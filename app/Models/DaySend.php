@@ -14,7 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * Su an yalnizca gonderimin OLDUGUNU ve o andaki ozeti kaydeder; veliye
  * gercek bildirim gitmesi ayri bir adimdir.
  */
-#[Fillable(['id', 'classroom_id', 'user_id', 'day', 'requested_at', 'sent_at', 'child_count', 'photo_count'])]
+#[Fillable(['id', 'classroom_id', 'user_id', 'day', 'requested_at', 'sent_at', 'child_count', 'photo_count', 'parent_count'])]
 class DaySend extends Model
 {
     use BelongsToInstitution, HasUuids;
@@ -28,6 +28,7 @@ class DaySend extends Model
             'sent_at' => 'datetime',
             'child_count' => 'integer',
             'photo_count' => 'integer',
+            'parent_count' => 'integer',
         ];
     }
 

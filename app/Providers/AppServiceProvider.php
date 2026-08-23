@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Notifications\ParentLinkChannel;
 use Illuminate\Foundation\Console\ServeCommand;
 use Illuminate\Support\ServiceProvider;
+use InvalidArgumentException;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -12,7 +14,18 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Veli baglantisi kanali config'ten secilir; saglayici geldiginde
+        // yeni bir sinif yazip config'i degistirmek yeterli olsun diye.
+        $this->app->bind(ParentLinkChannel::class, function () {
+            $secilen = config('kres.parent_link_channel');
+            $sinif = config("kres.parent_link_channels.{$secilen}");
+
+            if ($sinif === null) {
+                throw new InvalidArgumentException("Tanimsiz veli baglanti kanali: {$secilen}");
+            }
+
+            return $this->app->make($sinif);
+        });
     }
 
     /**

@@ -113,8 +113,8 @@ class DaySendTest extends TestCase
             ->assertJsonPath('data.day', '2026-08-23')
             ->assertJsonPath('data.child_count', 3)
             ->assertJsonPath('data.photo_count', 2)
-            // Veli verisi bu semada yok; uydurma sayi yerine null.
-            ->assertJsonPath('data.parent_count', null);
+            // Bu sinifta veli yok; uydurma sayi degil gercek sifir.
+            ->assertJsonPath('data.parent_count', 0);
 
         $this->assertDatabaseCount('day_sends', 1);
     }

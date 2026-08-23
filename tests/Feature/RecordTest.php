@@ -432,6 +432,102 @@ class RecordTest extends TestCase
         $this->postJson('/api/v1/records', $this->payload())->assertStatus(401);
     }
 
+    public function test_ogretmen_kaydini_silebilir(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $payload = $this->payload();
+        $this->postJson('/api/v1/records', $payload)->assertStatus(201);
+
+        $this->deleteJson('/api/v1/records/'.$payload['id'])->assertStatus(204);
+
+        // Yumusak silme: satir durur, deleted_at dolar.
+        $this->assertSame(0, Record::query()->count());
+        $this->assertSame(1, Record::onlyTrashed()->count());
+        $this->assertNotNull(Record::onlyTrashed()->sole()->deleted_at);
+    }
+
+    public function test_zaten_silinmis_kayit_404_doner(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $payload = $this->payload();
+        $this->postJson('/api/v1/records', $payload)->assertStatus(201);
+        $this->deleteJson('/api/v1/records/'.$payload['id'])->assertStatus(204);
+
+        // Kuyruk ayni silme istegini tekrar gonderebilir; istemci 404'u
+        // basari sayiyor.
+        $this->deleteJson('/api/v1/records/'.$payload['id'])->assertStatus(404);
+    }
+
+    public function test_olmayan_kayit_404_doner(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $this->deleteJson('/api/v1/records/'.Str::uuid7())->assertStatus(404);
+    }
+
+    public function test_atanmamis_ogretmen_silemez(): void
+    {
+        Sanctum::actingAs($this->admin);
+
+        $payload = $this->payload([
+            'classroom_id' => $this->atanmamis->id,
+            'child_id' => $this->atanmamisCocuk->id,
+        ]);
+        $this->postJson('/api/v1/records', $payload)->assertStatus(201);
+
+        Sanctum::actingAs($this->ayse);
+
+        $this->deleteJson('/api/v1/records/'.$payload['id'])->assertStatus(403);
+        $this->assertSame(1, Record::query()->count());
+    }
+
+    public function test_gecikmis_post_silinmis_kaydi_diriltemez(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $payload = $this->payload();
+        $this->postJson('/api/v1/records', $payload)->assertStatus(201);
+        $this->deleteJson('/api/v1/records/'.$payload['id'])->assertStatus(204);
+
+        // Agda gecikmis POST silmeden SONRA varir. Basarili sayilir ama
+        // kayit geri gelmez.
+        $this->postJson('/api/v1/records', $payload)->assertStatus(200);
+
+        $this->assertSame(0, Record::query()->count());
+        $this->assertSame(1, Record::onlyTrashed()->count());
+    }
+
+    public function test_silinmis_kayit_toplu_gonderimde_de_diriltilmez(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $payload = $this->payload();
+        $this->postJson('/api/v1/records', $payload)->assertStatus(201);
+        $this->deleteJson('/api/v1/records/'.$payload['id'])->assertStatus(204);
+
+        $this->postJson('/api/v1/records/batch', ['records' => [$payload]])
+            ->assertStatus(200)
+            ->assertJsonPath('results.0.status', 200)
+            ->assertJsonPath('results.0.result', 'deleted');
+
+        $this->assertSame(0, Record::query()->count());
+    }
+
+    public function test_token_yoksa_silinemez(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $payload = $this->payload();
+        $this->postJson('/api/v1/records', $payload)->assertStatus(201);
+
+        app()['auth']->forgetGuards();
+
+        $this->deleteJson('/api/v1/records/'.$payload['id'])->assertStatus(401);
+        $this->assertSame(1, Record::query()->count());
+    }
+
     public function test_turetilmis_kolonlar_value_ile_dolar(): void
     {
         Sanctum::actingAs($this->ayse);

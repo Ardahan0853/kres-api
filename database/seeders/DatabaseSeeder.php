@@ -68,6 +68,9 @@ class DatabaseSeeder extends Seeder
         $this->children($papatyalar, random_int(8, 12));
         $this->children($laleler, random_int(8, 12));
         $this->children($menekseler, random_int(8, 12));
+
+        // .env'de DEV_PARENT_PHONE varsa tek bir gercek test velisi olusturur.
+        $this->call(DevParentSeeder::class);
     }
 
     private function classroom(Institution $institution, string $name): Classroom

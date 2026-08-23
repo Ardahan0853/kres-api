@@ -22,6 +22,7 @@ Route::prefix('v1')->group(function () {
         // "batch" bir id sanilmasin.
         Route::post('records/batch', [RecordController::class, 'batch']);
         Route::post('records', [RecordController::class, 'store']);
+        Route::delete('records/{recordId}', [RecordController::class, 'destroy']);
 
         // Dosyanin kendisi bu uclardan gecmez; imzali storage rotasina PUT edilir.
         Route::post('photos/upload-url', [PhotoController::class, 'uploadUrl']);

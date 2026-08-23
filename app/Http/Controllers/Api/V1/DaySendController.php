@@ -9,9 +9,11 @@ use App\Models\Child;
 use App\Models\Classroom;
 use App\Models\DaySend;
 use App\Models\Photo;
+use App\Support\ParentLinks;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Sinifin gununu veliye gonderme.
@@ -29,6 +31,8 @@ use Illuminate\Support\Carbon;
  */
 class DaySendController extends Controller
 {
+    public function __construct(private ParentLinks $links) {}
+
     public function store(StoreDaySendRequest $request, string $classroomId): JsonResponse
     {
         $data = $request->validated();
@@ -78,6 +82,7 @@ class DaySendController extends Controller
                 // Sunucunun gonderimi isledigi an; requested_at ile karistirilmaz.
                 'sent_at' => now(),
                 'child_count' => $this->childCount($classroom),
+                'parent_count' => $this->parentCount($classroom),
                 // Fotograflar AYRI kuyrukta oldugu icin hala yukleniyor
                 // olabilir; o an elimizde ne varsa o sayilir.
                 'photo_count' => $this->photoCount($classroom, $data['day']),
@@ -96,12 +101,34 @@ class DaySendController extends Controller
             return $this->resourceResponse($raced, 200);
         }
 
+        // Yalnizca YENI gonderimde baglanti uretilir; tekrar gonderimde
+        // (200 donen yollar) veliye ikinci kez bildirim gitmemeli.
+        // Baglantilar API yanitinda DONULMEZ: ogretmenin telefonunda veli
+        // linki tutmanin faydasi yok, sizma yuzeyi artar.
+        $this->links->dispatchFor($classroom, $data['day']);
+
         return $this->resourceResponse($daySend, 201);
     }
 
     private function childCount(Classroom $classroom): int
     {
         return Child::query()->where('classroom_id', $classroom->getKey())->count();
+    }
+
+    /**
+     * Bilgilendirilecek veli sayisi.
+     *
+     * Bir velinin sinifta birden fazla cocugu olabilir (kardesler) ve bir
+     * cocugun birden fazla velisi olabilir. Bu yuzden cocuk sayisindan
+     * turetilemez; DISTINCT veli sayilir.
+     */
+    private function parentCount(Classroom $classroom): int
+    {
+        return DB::table('child_parent')
+            ->join('children', 'children.id', '=', 'child_parent.child_id')
+            ->where('children.classroom_id', $classroom->getKey())
+            ->distinct()
+            ->count('child_parent.parent_id');
     }
 
     /**

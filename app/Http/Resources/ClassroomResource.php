@@ -16,6 +16,8 @@ class ClassroomResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'children_count' => (int) $this->children_count,
+            // Bilgilendirilecek DISTINCT veli sayisi (kardesler tek sayilir).
+            'parent_count' => (int) $this->parent_count,
             // Bugunun gunu gonderilmisse damgasi, gonderilmemisse null.
             'day_sent_at' => $this->day_sent_at
                 ? Carbon::parse($this->day_sent_at)->toIso8601String()

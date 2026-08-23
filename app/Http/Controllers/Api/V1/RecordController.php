@@ -12,6 +12,8 @@ use App\Models\Record;
 use App\Models\User;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -107,6 +109,41 @@ class RecordController extends Controller
     }
 
     /**
+     * Ogretmenin yanlislikla girdigi kaydi siler.
+     *
+     * Silme YUMUSAKTIR: satir durur, deleted_at dolar. Boylece "kim ne zaman
+     * sildi" izi kalir ve gecikmis bir POST kaydi diriltemez.
+     *
+     * Gun gonderilmis olsa bile silmeye izin verilir: veli sayfasi canli
+     * okudugu icin duzeltme aninda yansir. Kilitleseydik yanlis kayit veliye
+     * kalici olarak yanlis gorunurdu.
+     */
+    public function destroy(Request $request, string $recordId): Response
+    {
+        $user = $request->user();
+
+        // Global scope kurum disini zaten eler; baska kurumun kaydi burada
+        // "yok" gorunur ve 404 alir.
+        $record = Record::find($recordId);
+
+        if ($record === null) {
+            // Zaten yok (ya da zaten silinmis). Istemci bunu basari sayiyor:
+            // kuyruk ayni silme istegini tekrar gonderebilir.
+            abort(404);
+        }
+
+        $assigned = $user->classrooms()->whereKey($record->classroom_id)->exists();
+
+        if (! $user->isAdmin() && ! $assigned) {
+            abort(403, 'Bu sınıfa atanmış değilsiniz.');
+        }
+
+        $record->delete();
+
+        return response()->noContent();
+    }
+
+    /**
      * Tek kaydi dogrular, yetkilendirir ve yazar.
      *
      * @param  array<string, mixed>  $data
@@ -144,6 +181,16 @@ class RecordController extends Controller
 
         if ($existing !== null) {
             return $this->applyUpdate($existing, $classroom, $child, $data);
+        }
+
+        // Silinmis kayit DIRILTILMEZ. Silme ile yazma iki ayri istektir ve
+        // agda siralari bozulabilir: DELETE once varip 404 alabilir, ardindan
+        // gecikmis POST gelirse kayit geri gelirdi. deleted_at doluysa istegi
+        // basarili sayip satira dokunmuyoruz.
+        $silinmis = Record::onlyTrashed()->find($data['id']);
+
+        if ($silinmis !== null) {
+            return $this->written($silinmis, 'deleted', 200);
         }
 
         // Ayni id baska kurumda duruyorsa kaydi DONMEYIZ; donmek o kurumun

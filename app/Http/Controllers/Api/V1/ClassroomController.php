@@ -8,6 +8,7 @@ use App\Models\Classroom;
 use App\Models\DaySend;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 
 class ClassroomController extends Controller
 {
@@ -27,6 +28,14 @@ class ClassroomController extends Controller
             // varsa damgasi, yoksa null. Bugun uygulama saat dilimine gore
             // alinir; ogretmenin yerel gunu gece yarisina yakin saatlerde
             // farklilasabilir.
+            // Gonderim onay ekrani "Bilgilendirilecek veli N" yazabilsin diye
+            // gonderimden ONCE lazim. Kardesler ve cok velili cocuklar yuzunden
+            // cocuk sayisindan turetilemez; DISTINCT veli sayilir.
+            ->addSelect(['parent_count' => DB::table('child_parent')
+                ->selectRaw('count(distinct child_parent.parent_id)')
+                ->join('children', 'children.id', '=', 'child_parent.child_id')
+                ->whereColumn('children.classroom_id', 'classrooms.id'),
+            ])
             ->addSelect(['day_sent_at' => DaySend::query()
                 ->select('sent_at')
                 ->whereColumn('classroom_id', 'classrooms.id')

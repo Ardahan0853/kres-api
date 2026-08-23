@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
  * Gun icinde tutulan kayit: yoklama, yemek, uyku, tuvalet, not, fotograf.
@@ -17,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 #[Fillable(['id', 'classroom_id', 'child_id', 'user_id', 'type', 'value', 'recorded_at'])]
 class Record extends Model
 {
-    use BelongsToInstitution, HasUuids;
+    use BelongsToInstitution, HasUuids, SoftDeletes;
 
     public const TYPE_ATTENDANCE = 'attendance';
 
@@ -49,6 +50,10 @@ class Record extends Model
         return [
             'value' => 'array',
             'recorded_at' => 'datetime',
+            // Turetilmis kolon. PostgreSQL gercek boolean, SQLite 0/1 integer
+            // donduruyor; cast olmadan `=== false` karsilastirmasi motora gore
+            // farkli sonuc veriyor.
+            'present' => 'boolean',
         ];
     }
 

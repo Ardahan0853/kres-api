@@ -77,6 +77,7 @@ Hepsi `/api/v1` altında. `auth/login` dışındakiler Sanctum korumalı.
 | GET | `classrooms/{classroom}/children` | Atanmamış öğretmene 403, `photo_consent` içerir |
 | POST | `records` | Günlük kayıt yazar. Idempotent, aşağıya bak |
 | POST | `records/batch` | `{records: [...]}`, en fazla 200 kayıt, her zaman 200 döner |
+| DELETE | `records/{id}` | Kaydı siler (yumuşak). Yok ise 404 |
 | POST | `photos/upload-url` | Kısa ömürlü imzalı yükleme adresi |
 | POST | `photos` | Yüklenen fotoğrafı kesinleştirir |
 
@@ -141,6 +142,27 @@ koduna değil, kendi id'sinin satırına bakmalıdır:
   {"id": "...", "index": 2, "status": 422, "result": "invalid", "message": "..."}
 ]}
 ```
+
+### Kayıt silme
+
+Öğretmen 5 saniyelik geri alma penceresi kaçtıktan sonra da yanlış girdiği
+kaydı silebilir: `DELETE records/{id}` → **204**. Kayıt yoksa veya zaten
+silinmişse **404** döner; istemci bunu başarı sayar, çünkü kuyruk aynı silme
+isteğini tekrar gönderebilir.
+
+Silme **yumuşaktır** (`deleted_at`). Sebebi izlenebilirlik değil, doğruluk:
+silme ve yazma iki ayrı istektir ve ağda sıraları bozulabilir. `DELETE` önce
+varıp 404 alır, ardından gecikmiş `POST` gelirse sert silmede kayıt geri
+gelirdi. `deleted_at` doluysa `POST` **200** döner ama satırı diriltmez
+(`batch` içinde sonucu `deleted` görünür).
+
+Gün gönderilmiş olsa bile silmeye izin verilir: veli sayfası canlı okuduğu
+için düzeltme anında yansır. Kilitleseydik yanlış kayıt veliye kalıcı olarak
+yanlış görünürdü.
+
+> Veli sayfası kayıtları `withoutGlobalScope('institution')` ile okur.
+> `withoutGlobalScopes()` deseydik yumuşak silme kapsamı da kalkar ve silinen
+> kayıt velide görünmeye devam ederdi.
 
 ### Türetilmiş kolonlar
 
@@ -312,6 +334,106 @@ kullanır.
 > `day` bir tarih kolonudur ama sürücüye göre saat bilgisiyle saklanabilir;
 > bu yüzden gün karşılaştırmaları `whereDate` ile yapılır. Düz eşitlik
 > PostgreSQL'de çalışıp SQLite'ta sessizce boş dönüyordu.
+
+## Veli tarafı
+
+Veli uygulamayı kullanmaz; kendisine gönderilen bağlantıyla açılan tek bir
+web sayfası görür.
+
+### Veri
+
+`parents` tablosu velileri, `child_parent` pivotu çocuk-veli bağını tutar.
+Bir çocuğun birden fazla velisi, bir velinin birden fazla çocuğu olabilir —
+bu yüzden veli sayısı çocuk sayısından türetilmez, **DISTINCT** sayılır
+(`GET classrooms` ve `day-send` yanıtlarındaki `parent_count`).
+
+Telefonlar E.164 olarak saklanır (`05525700853` → `+905525700853`).
+Çözülemeyen girdi `null` döner, uydurulmaz.
+
+> PHP'de `Parent` ayrılmış bir kelimedir ve sınıf adı olamaz. Model adı bu
+> yüzden `Guardian`, tablo adı `parents`.
+
+Geliştirme için tek bir test velisi `.env` içindeki `DEV_PARENT_PHONE`'dan
+oluşturulur. Numara koda ve depoya girmez; env boşsa veli hiç oluşturulmaz.
+
+```
+php artisan db:seed --class=DevParentSeeder
+```
+
+### Sihirli bağlantı
+
+Kapsam **bir veli + bir çocuk + bir gün**. Gün de kapsama dahildir: akşam
+gönderilen bir bağlantı ertesi sabah boş sayfa göstermesin, gönderildiği
+günü göstersin diye.
+
+Token 32 rastgele bayttır (base64url, 43 karakter) ve veritabanında **yalnızca
+sha256 özeti** saklanır. Veritabanı sızarsa eldeki özetlerden çalışan bir
+bağlantı üretilemez. Süre 7 gün.
+
+Rota `GET /v/{token}` — public, oturumsuz, `api/v1` altında değil. Geçersiz
+ve süresi dolmuş token **aynı** sayfayı görür (404), böylece token'ın var
+olup olmadığı dışarıdan anlaşılmaz.
+
+Bir kapsam için **aynı anda tek canlı bağlantı** bulunur: yeni bağlantı
+üretildiğinde eskisi `revoked_at` ile iptal edilir (satır silinmez, iz
+kalır). Aksi halde `parent:links` her çalıştığında bir anahtar daha eklenir,
+hiçbiri geri alınamaz ve log'a ya da iletilen bir mesaja düşen her adres
+süresi bitene kadar canlı kalırdı.
+
+> Bunun bedeli: yeni bağlantı üretmek daha önce paylaşılan adresi geçersiz
+> kılar. "Eskisini yeniden göster" seçeneği yok, çünkü ham token saklanmıyor —
+> saklasaydık veritabanı sızıntısına karşı korumayı kaybederdik.
+
+### Veli sayfası
+
+Tek çocuğun tek günü: yoklama, kahvaltı/öğle, uyku, tuvalet/bez ve o çocuğun
+etiketli olduğu fotoğraflar. Sınıfın diğer çocuklarına ait hiçbir veri —
+isim, sayı, fotoğraf — bu sayfaya girmez.
+
+- Aynı türde birden fazla kayıt varsa **sonuncusu** geçerlidir; öğretmen
+  "geldi"yi "gelmedi"ye düzeltmişse veli son hâlini görür.
+- Fotoğraflar kısa ömürlü imzalı adreslerle verilir. Yol adresin içinde geçer
+  ama imzasız istek **403** alır ve imza kısa sürede geçersizleşir.
+- `photo_consent` sayfa çizilirken **yeniden** kontrol edilir; izin sonradan
+  geri alınmışsa eski fotoğraf da görünmez.
+- Kayıt yoksa "henüz kayıt girilmemiş" denir, boş alanlar uydurulmaz.
+- Saatler `kres.display_timezone` (varsayılan `Europe/Istanbul`) ile gösterilir.
+  Damgalar UTC saklandığı için çevrilmezse veli 23:47'deki kaydı 20:47 görür.
+
+### Kuru çalışma (SMS yok)
+
+Gönderim `ParentLinkChannel` arayüzünün arkasındadır. Şu anki tek uygulama
+`LogChannel`: **SMS göndermez**, bağlantıyı log'a yazar (telefon maskeli).
+Sağlayıcı geldiğinde arayüzü uygulayan yeni bir sınıf yazıp
+`config/kres.php` içindeki `parent_link_channel` değerini değiştirmek yeterli;
+`day-send` koduna dokunulmaz.
+
+Bağlantılar **API yanıtında dönmez** — öğretmenin telefonunda veli linki
+tutmanın faydası yok, sızma yüzeyi artar. Kuru çalışmada bağlantıya ulaşmanın
+yolu şudur:
+
+```
+php artisan parent:links --classroom=Papatyalar --day=2026-08-23
+php artisan parent:links --classroom=Papatyalar --day=2026-08-23 --url=http://192.168.1.2:8000
+```
+
+Komut **varsayılan olarak bağlantı üretmez**. Canlı bir bağlantı varsa
+yalnızca varlığını ve üretim saatini bildirir; adresi gösteremez, çünkü ham
+token saklanmıyor. Üretim mevcut bağlantıyı iptal ettiği için, hata ayıklamak
+üzere çalıştırılan bir komut velinin elindeki adresi sessizce öldürürdü.
+
+Yeni bağlantı açıkça istenir ve komut ne olacağını önden söyler:
+
+```
+php artisan parent:links --classroom=Papatyalar --day=2026-08-23 --rotate
+```
+
+> CLI'da istek host'u yoktur ve adres `APP_URL`'e düşer — o da genellikle
+> `localhost`'tur. Telefonda `localhost` telefonun kendisi demektir; bu yüzden
+> `--url` vardır ve komut adres localhost çıktığında kendiliğinden uyarır.
+
+Bağlantılar yalnızca **yeni** gönderimde üretilir; tekrar gönderimde (200
+dönen yollar) veliye ikinci kez bildirim gitmez.
 
 ## Kurum izolasyonu
 

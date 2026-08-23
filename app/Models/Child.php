@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 #[Fillable(['institution_id', 'classroom_id', 'first_name', 'last_name', 'birth_date', 'photo_consent'])]
 class Child extends Model
@@ -63,5 +64,12 @@ class Child extends Model
     public function classroom(): BelongsTo
     {
         return $this->belongsTo(Classroom::class);
+    }
+
+    /** Bir cocugun birden fazla velisi olabilir. */
+    public function parents(): BelongsToMany
+    {
+        return $this->belongsToMany(Guardian::class, 'child_parent', 'child_id', 'parent_id')
+            ->withPivot('relation');
     }
 }

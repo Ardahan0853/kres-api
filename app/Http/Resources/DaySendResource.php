@@ -20,8 +20,8 @@ class DaySendResource extends JsonResource
             'sent_at' => $this->sent_at?->toIso8601String(),
             'child_count' => $this->child_count,
             'photo_count' => $this->photo_count,
-            // Veli verisi bu semada HENUZ YOK; uydurma sayi donmemek icin null.
-            'parent_count' => null,
+            // Gonderim anindaki DISTINCT veli sayisi (kardesler tek sayilir).
+            'parent_count' => $this->parent_count,
         ];
     }
 }
