@@ -16,6 +16,10 @@ class DaySendResource extends JsonResource
             'classroom_id' => $this->classroom_id,
             // Ogretmenin yerel takvim gunu (YYYY-MM-DD)
             'day' => $this->day?->toDateString(),
+            // Gunun kacinci gonderimi (ilk gonderim 1) ve bu satirin acik bir
+            // yeniden gonderim olup olmadigi.
+            'attempt' => $this->attempt,
+            'resend' => $this->resend,
             'requested_at' => $this->requested_at?->toIso8601String(),
             'sent_at' => $this->sent_at?->toIso8601String(),
             'child_count' => $this->child_count,

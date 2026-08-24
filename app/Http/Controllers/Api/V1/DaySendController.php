@@ -28,6 +28,17 @@ use Illuminate\Support\Facades\DB;
  * Ikincisine 409 DONMEYIZ: istemci 409'u kalici ret sayip ogretmene
  * "gonderilemedi" der, halbuki gun gitmistir. Yanlis bilgi vermektense
  * mevcut kaydi donmek dogrudur.
+ *
+ * YENIDEN GONDERIM bu iki tekrardan ayrilir ve yalnizca govdede `resend: true`
+ * varken olur. Cikarim YAPILMAZ: "yeni id geldiyse ogretmen tekrar basmistir"
+ * deseydik, yanit ag uzerinde kaybolup kuyruk yeni bir id ile tekrar
+ * denediginde veli ikinci SMS'i alirdi. Acik bayrak, kuyrugun tekrari ile
+ * ogretmenin ikinci NIYETINI ayiran tek guvenilir isarettir.
+ *
+ * Yeniden gonderimin bedeli bilinerek kabul edildi: baglantilar yeniden
+ * uretilir ve bir kapsam icin tek canli baglanti oldugundan velinin elindeki
+ * ESKI ADRES OLUR. Ham token saklanmadigi icin "eskisini tekrar gonder"
+ * secenegi yok (bkz. MagicLink).
  */
 class DaySendController extends Controller
 {
@@ -53,23 +64,32 @@ class DaySendController extends Controller
             abort(403, 'Bu sınıfa atanmış değilsiniz.');
         }
 
-        // Once ayni id, sonra ayni gun: ikisi de mevcut kaydi 200 ile doner.
-        $existing = DaySend::query()
-            ->where(function ($query) use ($data, $classroom) {
-                $query->whereKey($data['id'])
-                    ->orWhere(function ($inner) use ($data, $classroom) {
-                        // whereDate: `day` bir tarih kolonu ama surucuye gore
-                        // saat bilgisiyle birlikte saklanabiliyor; duz esitlik
-                        // SQLite'ta tutmuyor.
-                        $inner->where('classroom_id', $classroom->getKey())
-                            ->whereDate('day', $data['day']);
-                    });
-            })
+        // 1. AYNI id daha once gorulduyse kuyruk aynen tekrar gondermistir.
+        // Bildirim uretilmez; yeniden gonderim istense bile, cunku bu istek
+        // yeni bir niyet degil eski bir istegin kopyasidir.
+        $sameId = DaySend::find($data['id']);
+
+        if ($sameId !== null) {
+            return $this->resourceResponse($sameId, 200);
+        }
+
+        // 2. Gunun en son gonderimi. whereDate: `day` bir tarih kolonu ama
+        // surucuye gore saat bilgisiyle birlikte saklanabiliyor; duz esitlik
+        // SQLite'ta tutmuyor.
+        $latest = DaySend::query()
+            ->where('classroom_id', $classroom->getKey())
+            ->whereDate('day', $data['day'])
+            ->orderByDesc('attempt')
             ->first();
 
-        if ($existing !== null) {
-            return $this->resourceResponse($existing, 200);
+        // 3. Gun gonderilmis ve acikca yeniden gonderim ISTENMEMISSE eski
+        // davranis aynen surer: mevcut kayit 200 ile doner, bildirim cikmaz.
+        if ($latest !== null && ! ($data['resend'] ?? false)) {
+            return $this->resourceResponse($latest, 200);
         }
+
+        // Bayrak gelse bile gun hic gonderilmemisse bu ILK gonderimdir.
+        $resend = $latest !== null;
 
         try {
             $daySend = DaySend::create([
@@ -77,6 +97,10 @@ class DaySendController extends Controller
                 'classroom_id' => $classroom->getKey(),
                 'user_id' => $user->getKey(),
                 'day' => $data['day'],
+                // Sirayi sunucu hesaplar; tekil kisit es zamanli iki istegin
+                // ikisinin de bildirim uretmesini engeller.
+                'attempt' => ($latest?->attempt ?? 0) + 1,
+                'resend' => $resend,
                 // Butona basildigi an: cihaz damgasi, sunucu saati degil.
                 'requested_at' => $data['requested_at'],
                 // Sunucunun gonderimi isledigi an; requested_at ile karistirilmaz.
@@ -88,21 +112,28 @@ class DaySendController extends Controller
                 'photo_count' => $this->photoCount($classroom, $data['day']),
             ]);
         } catch (UniqueConstraintViolationException) {
-            // Ayni gun es zamanli iki istekle gonderildi.
-            $raced = DaySend::query()
-                ->where('classroom_id', $classroom->getKey())
-                ->whereDate('day', $data['day'])
-                ->first();
+            // Iki ayri carpisma buraya duser: ayni id es zamanli iki istekle
+            // geldi, ya da ayni gunun ayni sirasi. Ikisinde de KAZANAN taraf
+            // bildirimi uretmistir; biz uretmeyiz, yoksa veli iki SMS alir.
+            $raced = DaySend::find($data['id'])
+                ?? DaySend::query()
+                    ->where('classroom_id', $classroom->getKey())
+                    ->whereDate('day', $data['day'])
+                    ->orderByDesc('attempt')
+                    ->first();
 
             if ($raced === null) {
+                // Id baska bir kuruma ait. Kaydi DONMEYIZ; donmek o kurumun
+                // gonderim saatini sizdirirdi.
                 return $this->refuse('Gönderim kaydedilemedi.', 'id', 'conflict');
             }
 
             return $this->resourceResponse($raced, 200);
         }
 
-        // Yalnizca YENI gonderimde baglanti uretilir; tekrar gonderimde
-        // (200 donen yollar) veliye ikinci kez bildirim gitmemeli.
+        // Baglanti yalnizca SATIR ACILAN yolda uretilir: ilk gonderimde ve
+        // acikca istenen yeniden gonderimde. 200 donen yollarin hicbirinde
+        // veliye ikinci bildirim gitmez.
         // Baglantilar API yanitinda DONULMEZ: ogretmenin telefonunda veli
         // linki tutmanin faydasi yok, sizma yuzeyi artar.
         $this->links->dispatchFor($classroom, $data['day']);

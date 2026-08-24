@@ -74,7 +74,7 @@ Hepsi `/api/v1` altında. `auth/login` dışındakiler Sanctum korumalı.
 | GET | `me` | `{data: {...user}}` |
 | POST | `auth/session-log` | Giriş kaydı (denetim izi). 201 yeni / 200 zaten var |
 | GET | `classrooms` | Öğretmenin atandığı sınıflar; admin ise kurumun tamamı. `day_sent_at` içerir |
-| POST | `classrooms/{classroom}/day-send` | Sınıfın gününü gönderir |
+| POST | `classrooms/{classroom}/day-send` | Sınıfın gününü gönderir. `resend: true` ile yeniden gönderir |
 | GET | `classrooms/{classroom}/children` | Atanmamış öğretmene 403, `photo_consent` içerir |
 | POST | `records` | Günlük kayıt yazar. Idempotent, aşağıya bak |
 | POST | `records/batch` | `{records: [...]}`, en fazla 200 kayıt, her zaman 200 döner |
@@ -341,8 +341,42 @@ veli tarafı ayrı bir adımdır.
 - aynı gün, farklı `id` → öğretmen ikinci kez bastı
 
 İkincisine **409 dönülmez**: istemci 409'u kalıcı ret sayıp öğretmene
-"gönderilemedi" derdi, hâlbuki gün gitmiştir. Bir sınıfın bir günü
-`unique(classroom_id, day)` ile tek kayıttır.
+"gönderilemedi" derdi, hâlbuki gün gitmiştir.
+
+### Yeniden gönderme
+
+Gün, gövdede **`resend: true`** varken yeniden gönderilebilir. Bu, yukarıdaki
+iki tekrardan ayrılan üçüncü durumdur ve **201** döner: yeni bir `day_sends`
+satırı açılır (`attempt` bir artar) ve veliye ikinci bildirim çıkar.
+
+Kural üçe iner:
+
+| gövde | sunucuda | sonuç |
+|---|---|---|
+| aynı `id` | görülmüş | 200, bildirim **yok** (kuyruk tekrarı) |
+| yeni `id`, `resend` yok | gün gönderilmiş | 200, bildirim **yok** (eski davranış) |
+| yeni `id`, `resend: true` | gün gönderilmiş | **201**, yeni satır, bildirim **var** |
+
+**Çıkarım yapılmaz.** "Yeni id geldiyse öğretmen tekrar basmıştır" deseydik,
+yanıt ağ üzerinde kaybolup kuyruk yeni bir id ile tekrar denediğinde veli
+ikinci SMS'i alırdı. Açık bayrak, kuyruğun tekrarı ile öğretmenin ikinci
+**niyetini** ayıran tek güvenilir işarettir. Bayrak gelse bile gün hiç
+gönderilmemişse bu ilk gönderimdir (`attempt: 1`, `resend: false`).
+
+> **Bedeli:** yeniden gönderim bağlantıları yeniden üretir ve bir kapsam için
+> tek canlı bağlantı olduğundan **velinin elindeki eski adres ölür**; onu
+> kaydetmiş veli 403 alır. Ham token saklanmadığı için "eskisini tekrar
+> gönder" seçeneği yoktur.
+
+Bir sınıfın bir günü artık tek kayıt değildir; tekil kısıt
+`unique(classroom_id, day, attempt)`. `attempt`'i **sunucu** hesaplar ve bu
+kısıt yarışı önler: aynı anda gelen iki istek aynı sırayı dener, birini
+veritabanı reddeder ve kaybeden taraf bildirim üretmeden mevcut kaydı döner.
+Satır kilidi yerine tekil kısıt seçildi — SQLite ile PostgreSQL arasında
+davranış farkı bırakmıyor.
+
+Satırlar birikir, güncellenmez: her satırın sayıları **o anın** değeridir,
+böylece günün gönderim geçmişi okunabilir kalır.
 
 `requested_at` butona basıldığı andır, `sent_at` sunucunun işlediği an —
 ikisi ayrı tutulur. `day` öğretmenin **yerel takvim günüdür** (`YYYY-MM-DD`)
@@ -350,12 +384,21 @@ ve UTC'ye çevrilmez.
 
 Özeti sunucu hesaplar. `photo_count` istek anında elde ne varsa onu sayar;
 fotoğraflar ayrı kuyrukta olduğu için sonradan gelen fotoğraf sayıyı
-değiştirebilir. `parent_count` şimdilik **null** döner — bu şemada henüz veli
-verisi yoktur ve uydurma sayı dönmek yanlış olurdu.
+değiştirebilir. `parent_count` **DISTINCT** veli sayısıdır (kardeşler tek
+sayılır); veli tablosu yokken bu alan null dönüyordu.
 
-`GET classrooms` yanıtındaki `day_sent_at`, o sınıfın **bugüne** ait gönderimi
-varsa damgasıdır, yoksa `null`. Sınıf kartındaki "✓ Gönderildi" şeridi bunu
-kullanır.
+**Boş gün sunucuda reddedilmez.** Kural yalnızca istemcidedir. Sebep somut:
+kayıtlar ve fotoğraflar ayrı kuyruklardadır, `photo_count` gönderim anında
+sayılır ve sadece fotoğraf çekilmiş gerçek bir gün, yüklemeler bitmeden
+gönderilirse sunucuda 0 kayıt + 0 fotoğraf görünür. 422 istemcide kalıcı ret
+olduğu için yanlış pozitifin bedeli telafisi olmayan ölü gün olurdu. Boş gün
+fotoğraf izni gibi bir güvenlik sınırı değildir; kötü ihtimalle gereksiz bir
+bildirim çıkar.
+
+`GET classrooms` yanıtındaki `day_sent_at`, o sınıfın **bugüne** ait
+gönderimi varsa damgasıdır, yoksa `null`. Günün birden fazla gönderimi olduğunda
+**en sonuncusunun** damgasıdır: öğretmenin sorduğu şey "veli en son ne zaman
+haber aldı". Sınıf kartındaki "✓ Gönderildi" şeridi bunu kullanır.
 
 > `day` bir tarih kolonudur ama sürücüye göre saat bilgisiyle saklanabilir;
 > bu yüzden gün karşılaştırmaları `whereDate` ile yapılır. Düz eşitlik

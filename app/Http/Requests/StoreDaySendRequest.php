@@ -20,6 +20,14 @@ class StoreDaySendRequest extends FormRequest
             'day' => ['required', 'date_format:Y-m-d'],
             // Butona basildigi an.
             'requested_at' => ['required', 'date'],
+            // Acik yeniden gonderim istegi. Gelmezse false; ASLA "yeni id
+            // geldi" diye cikarim yapilmaz -- kuyruk tekrarlari veliye
+            // ikinci SMS olarak giderdi.
+            //
+            // `offline` gibi bilerek gevsek dogrulanir: kati bir kural
+            // yuzunden 422'ye takilan gonderim istemcinin kuyrugunda
+            // sonsuza kadar donerdi.
+            'resend' => ['sometimes', 'boolean'],
         ];
     }
 

@@ -5,7 +5,9 @@ namespace Tests\Feature;
 use App\Models\Child;
 use App\Models\Classroom;
 use App\Models\DaySend;
+use App\Models\Guardian;
 use App\Models\Institution;
+use App\Models\MagicLink;
 use App\Models\Photo;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -245,5 +247,131 @@ class DaySendTest extends TestCase
         $this->getJson('/api/v1/classrooms')
             ->assertStatus(200)
             ->assertJsonPath('data.0.day_sent_at', null);
+    }
+
+    /**
+     * Veli baglantisinin uretilip uretilmedigini olcebilmek icin siniftaki
+     * bir cocuga veli baglanir; velisi olmayan sinifta dispatch sifir link
+     * uretir ve "bildirim cikti mi" sorusu olculemez.
+     */
+    private function veliBagla(): Guardian
+    {
+        $veli = new Guardian([
+            'name' => 'Test Veli',
+            'phone' => Guardian::normalizePhone('05525700853'),
+            'phone_raw' => '05525700853',
+        ]);
+        $veli->institution_id = $this->papatya->id;
+        $veli->save();
+
+        Child::where('classroom_id', $this->atanmis->id)->first()->parents()->attach($veli->id);
+
+        return $veli;
+    }
+
+    public function test_resend_ile_gun_yeniden_gonderilir(): void
+    {
+        Sanctum::actingAs($this->ayse);
+        $this->veliBagla();
+
+        $ilk = $this->payload();
+        $this->postJson($this->url(), $ilk)
+            ->assertStatus(201)
+            ->assertJsonPath('data.attempt', 1)
+            ->assertJsonPath('data.resend', false);
+
+        // Ogretmen ogleden sonraki kayitlari girip acikca yeniden gonderdi.
+        $ikinci = $this->payload(['resend' => true, 'requested_at' => '2026-08-23T19:40:00.000Z']);
+        $this->postJson($this->url(), $ikinci)
+            ->assertStatus(201)
+            ->assertJsonPath('data.id', $ikinci['id'])
+            ->assertJsonPath('data.attempt', 2)
+            ->assertJsonPath('data.resend', true);
+
+        // Gunun iki gonderimi de kayitli: gecmis silinmez.
+        $this->assertDatabaseCount('day_sends', 2);
+    }
+
+    public function test_yeniden_gonderim_veliye_ikinci_bildirim_cikarir(): void
+    {
+        Sanctum::actingAs($this->ayse);
+        $this->veliBagla();
+
+        $this->postJson($this->url(), $this->payload())->assertStatus(201);
+        $this->assertSame(1, MagicLink::withoutGlobalScopes()->count());
+
+        $this->postJson($this->url(), $this->payload(['resend' => true]))->assertStatus(201);
+
+        // Bedeli bilerek kabul edildi: yeni baglanti uretilir ve velinin
+        // elindeki eski adres olur. Ham token saklanmadigi icin eskisini
+        // tekrar gondermek mumkun degil.
+        $this->assertSame(2, MagicLink::withoutGlobalScopes()->count());
+        $this->assertSame(1, MagicLink::withoutGlobalScopes()->whereNull('revoked_at')->count());
+    }
+
+    public function test_resend_ile_gelen_ayni_id_ikinci_bildirim_cikarmaz(): void
+    {
+        Sanctum::actingAs($this->ayse);
+        $this->veliBagla();
+
+        $this->postJson($this->url(), $this->payload())->assertStatus(201);
+
+        // Kuyruk yeniden gonderim istegini tekrarladi: yanit agda kaybolmus
+        // olabilir. Ayni id oldugu icin bu YENI BIR NIYET DEGIL.
+        $tekrar = $this->payload(['resend' => true]);
+        $this->postJson($this->url(), $tekrar)->assertStatus(201);
+        $this->postJson($this->url(), $tekrar)
+            ->assertStatus(200)
+            ->assertJsonPath('data.id', $tekrar['id'])
+            ->assertJsonPath('data.attempt', 2);
+
+        $this->assertDatabaseCount('day_sends', 2);
+        // Ucuncu bir baglanti uretilmedi; veli iki SMS'ten fazlasini almaz.
+        $this->assertSame(2, MagicLink::withoutGlobalScopes()->count());
+    }
+
+    public function test_resend_olmadan_yeni_id_hala_bildirim_cikarmaz(): void
+    {
+        Sanctum::actingAs($this->ayse);
+        $this->veliBagla();
+
+        $this->postJson($this->url(), $this->payload())->assertStatus(201);
+
+        // Bayrak yoksa eski davranis surer. Cikarim yapilmaz: "yeni id geldi"
+        // demek "ogretmen tekrar bastu" demek degildir.
+        $this->postJson($this->url(), $this->payload())->assertStatus(200);
+
+        $this->assertDatabaseCount('day_sends', 1);
+        $this->assertSame(1, MagicLink::withoutGlobalScopes()->count());
+    }
+
+    public function test_hic_gonderilmemis_gunde_resend_ilk_gonderimdir(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        // Istemci bayragi yanlislikla acik biraksa bile uydurma bir sira
+        // uretilmez; bu gun ilk kez gidiyor.
+        $this->postJson($this->url(), $this->payload(['resend' => true]))
+            ->assertStatus(201)
+            ->assertJsonPath('data.attempt', 1)
+            ->assertJsonPath('data.resend', false);
+    }
+
+    public function test_serit_en_son_gonderimin_saatini_gosterir(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $bugun = now()->toDateString();
+        $this->postJson($this->url(), $this->payload(['day' => $bugun]))->assertStatus(201);
+
+        $ikinci = $this->payload(['day' => $bugun, 'resend' => true]);
+        $this->postJson($this->url(), $ikinci)->assertStatus(201);
+
+        // Ogretmenin sordugu sey "veli en son ne zaman haber aldi".
+        $enSon = DaySend::find($ikinci['id']);
+
+        $this->getJson('/api/v1/classrooms')
+            ->assertStatus(200)
+            ->assertJsonPath('data.0.day_sent_at', $enSon->sent_at->toIso8601String());
     }
 }

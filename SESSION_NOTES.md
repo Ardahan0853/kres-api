@@ -22,6 +22,7 @@ Son güncelleme: 2026-08-24. Testler: **101/101 geçiyor**, 387 assertion.
 | Kuru çalışma: `LogChannel`, `parent:links` | bitti |
 | `auth/session-log` (giriş kaydı, denetim izi) | bitti |
 | Üçüncü öğün `snack` (ikindi) + veli sayfasında satırı | bitti |
+| `day-send` yeniden gönderim (`resend: true`) | bitti |
 
 **Açık işler:** yok. Mobil taraf da beklemede.
 
@@ -165,6 +166,43 @@ Bir velinin sınıfta iki çocuğu (kardeşler), bir çocuğun iki velisi olabil
 Veli tablosu yokken bu alan **null** dönüyordu — uydurma sayı yerine null,
 çünkü "18 veliye gönderildi" demek öğretmene yalan söylemek olurdu.
 
+### Yeniden gönderim: açık bayrak, çıkarım değil
+
+Önce bir sınıfın bir günü **tek kez** gönderilebiliyordu (`unique(classroom_id,
+day)`) ve her tekrar 200 dönüp bildirim üretmiyordu. Gerekçe doğruydu ama
+dardı: kuyruğun tekrarı ile **öğretmenin ikinci niyeti** aynı sepete
+düşüyordu. Sabah erken gönderilen günün öğleden sonraki kayıtları veliye bir
+daha bildirilemiyordu.
+
+Not: kilitlenen **veri değildi**. Bağlantı 7 gün canlı (`MagicLink::
+LIFETIME_DAYS`) ve veli sayfası kayıtları görüntüleme anında okuyor — sabah
+gönderilen adres akşam açıldığında günün tamamını gösteriyor. Çıkmayan tek
+şey ikinci haberdi. Kullanıcıya "gün kilitleniyor" diye sunulmadı.
+
+Artık `resend: true` ile yeniden gönderilebiliyor. **Çıkarım yapılmaz**
+("yeni id geldiyse öğretmen tekrar basmıştır" deseydik, yanıt ağda kaybolup
+kuyruk yeni id ile denediğinde veli ikinci SMS'i alırdı). Bayrak, kuyruğun
+tekrarı ile ikinci niyeti ayıran tek güvenilir işaret. Mobil taraf da bunu
+böyle önerdi ve idempotenslik anahtarının `id` kalması onların şartıydı.
+
+Şema: tekil kısıt `(classroom_id, day, attempt)` oldu, her kabul edilen
+gönderim kendi satırı. `attempt`'i sunucu hesaplar ve kısıt yarışı önler —
+**satır kilidi bilerek seçilmedi**, çünkü `lockForUpdate` SQLite'ta yok
+sayılır ve testlerin göremediği bir motor farkı daha eklerdi.
+
+Bedeli bilerek kabul edildi: yeniden gönderim bağlantıları döndürür, velinin
+elindeki eski adres ölür (ham token saklanmadığı için "eskisini tekrar
+gönder" yok).
+
+### Boş gün sunucuda reddedilmedi
+
+Mobil taraf "hiç kayıt yokken gönderimi sunucu da reddetsin mi" diye sordu.
+Reddedilmedi. Belirleyici sebep: kayıtlar ve **fotoğraflar ayrı kuyruklarda**
+ve `photoCount` gönderim anında sayılıyor — sadece fotoğraf çekilmiş gerçek
+bir gün, yüklemeler bitmeden gönderilirse sunucuda boş görünür. 422 istemcide
+kalıcı ret olduğundan yanlış pozitifin bedeli ölü gün olurdu. Boş gün,
+fotoğraf izni gibi bir güvenlik sınırı değil (kural 4 ile karıştırılmasın).
+
 ### Üçüncü öğün: `snack` (ikindi)
 
 Başta öğün yalnızca `breakfast` ve `lunch`'tı; README'de "`snack` yoktur"
@@ -237,6 +275,7 @@ Migration sırası (`database/migrations/`):
 2026_08_24_020000  records.deleted_at
 2026_08_24_030000  magic_links.revoked_at        (+ eski linkleri iptal)
 2026_08_24_040000  session_logs
+2026_08_24_050000  day_sends.attempt/resend     (tekil kısıt attempt'e taşındı)
 ```
 
 Tüm alan tabloları **UUID** birincil anahtar kullanır.
@@ -262,7 +301,7 @@ oturumları düşürüyor, o yüzden veri bozulmadan yerinde düzeltildi.
 | DELETE | `api/v1/records/{id}` | 204 / 404 (zaten yok) |
 | POST | `api/v1/photos/upload-url` | imzalı PUT adresi, 10 dk |
 | POST | `api/v1/photos` | 201 / 200 |
-| POST | `api/v1/classrooms/{classroom}/day-send` | 201 / 200 |
+| POST | `api/v1/classrooms/{classroom}/day-send` | 201 / 200, `resend: true` → 201 |
 | GET | `/v/{token}` | veli sayfası, public, `api/v1` altında değil |
 
 **İstemcinin bağımlı olduğu davranışlar** (değiştirmeden önce mobil tarafa sor):
@@ -272,7 +311,9 @@ oturumları düşürüyor, o yüzden veri bozulmadan yerinde düzeltildi.
 - `batch` yanıtında `id` + `index` döner; id doğrulanamazsa null gelir,
   eşleşme `index` ile yapılır.
 - Aynı gün ikinci kez `day-send` → **409 değil 200** (gün gitti, "gönderilemedi"
-  demek yanlış bilgi olur).
+  demek yanlış bilgi olur). Bildirim yalnızca `resend: true` ile yeniden çıkar.
+- `GET classrooms` → `day_sent_at`, günün **en son** gönderiminin damgasıdır
+  (yeniden gönderimden sonra o saat görünür).
 - `upload_url`'in host'u **isteğin host'undan** üretilir, `APP_URL`'den değil.
 
 ---

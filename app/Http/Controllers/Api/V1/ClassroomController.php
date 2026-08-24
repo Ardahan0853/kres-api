@@ -36,10 +36,15 @@ class ClassroomController extends Controller
                 ->join('children', 'children.id', '=', 'child_parent.child_id')
                 ->whereColumn('children.classroom_id', 'classrooms.id'),
             ])
+            // Gunun birden fazla gonderimi olabilir (yeniden gonderim). Serit
+            // EN SON bildirimin saatini gosterir: ogretmenin sordugu sey
+            // "veli en son ne zaman haber aldi". Siralamasiz birakilirsa hangi
+            // satirin dondugu surucuye kalirdi.
             ->addSelect(['day_sent_at' => DaySend::query()
                 ->select('sent_at')
                 ->whereColumn('classroom_id', 'classrooms.id')
                 ->whereDate('day', now()->toDateString())
+                ->orderByDesc('attempt')
                 ->limit(1),
             ])
             ->orderBy('name')
