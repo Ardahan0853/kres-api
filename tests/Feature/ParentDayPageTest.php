@@ -127,6 +127,30 @@ class ParentDayPageTest extends TestCase
             ->assertSee('1 bez', false);
     }
 
+    public function test_uc_ogun_de_gosterilir(): void
+    {
+        $this->record($this->defne, 'attendance', ['present' => true], '2026-08-23T06:10:00Z');
+        $this->record($this->defne, 'meal', ['meal' => 'breakfast', 'amount' => 'all'], '2026-08-23T06:30:00Z');
+        $this->record($this->defne, 'meal', ['meal' => 'lunch', 'amount' => 'some'], '2026-08-23T09:00:00Z');
+        // "snack" = ikindi.
+        $this->record($this->defne, 'meal', ['meal' => 'snack', 'amount' => 'none'], '2026-08-23T12:30:00Z');
+
+        $response = $this->get('/v/'.$this->link())->assertStatus(200);
+
+        $response->assertSee('Kahvaltı')->assertSee('Öğle yemeği')->assertSee('İkindi');
+        $response->assertSee('Yedi')->assertSee('Az yedi')->assertSee('Yemedi');
+    }
+
+    public function test_ikindi_kaydi_yoksa_isaretlenmemis_yazar(): void
+    {
+        $this->record($this->defne, 'meal', ['meal' => 'lunch', 'amount' => 'all'], '2026-08-23T09:00:00Z');
+
+        $this->get('/v/'.$this->link())
+            ->assertStatus(200)
+            ->assertSee('İkindi')
+            ->assertSee('İşaretlenmemiş');
+    }
+
     public function test_saatler_yerel_dilimde_gosterilir(): void
     {
         // 06:10 UTC = 09:10 Europe/Istanbul

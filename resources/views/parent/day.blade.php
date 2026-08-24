@@ -98,6 +98,17 @@
                         @endif
                     </span>
                 </div>
+
+                <div class="row">
+                    <span class="label">İkindi</span>
+                    <span class="value">
+                        @if (isset($amountLabels[$ozet['ikindi']]))
+                            {{ $amountLabels[$ozet['ikindi']] }}
+                        @else
+                            <span class="muted">İşaretlenmemiş</span>
+                        @endif
+                    </span>
+                </div>
             @endif
 
             @if ($ozet['uyku_goster'])

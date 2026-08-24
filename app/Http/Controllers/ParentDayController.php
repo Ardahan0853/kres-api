@@ -86,6 +86,8 @@ class ParentDayController extends Controller
         $geldi = $attendance?->present;
         $kahvalti = $records->last(fn (Record $r) => $r->meal_kind === 'breakfast')?->meal_amount;
         $ogle = $records->last(fn (Record $r) => $r->meal_kind === 'lunch')?->meal_amount;
+        // "snack" = ikindi.
+        $ikindi = $records->last(fn (Record $r) => $r->meal_kind === 'snack')?->meal_amount;
         $tuvalet = $records->where('toilet_kind', 'toilet')->count();
         $bez = $records->where('toilet_kind', 'diaper')->count();
 
@@ -97,12 +99,13 @@ class ParentDayController extends Controller
         return [
             'bos' => $records->isEmpty(),
             'geldi' => $geldi,
-            'ogun_goster' => ! $gelmedi || $kahvalti !== null || $ogle !== null,
+            'ogun_goster' => ! $gelmedi || $kahvalti !== null || $ogle !== null || $ikindi !== null,
             'uyku_goster' => ! $gelmedi || $uykuBasi !== null,
             'tuvalet_goster' => ! $gelmedi || $tuvalet > 0 || $bez > 0,
             'geldi_saat' => $this->local($attendance?->recorded_at),
             'kahvalti' => $kahvalti,
             'ogle' => $ogle,
+            'ikindi' => $ikindi,
             'uyku_basi' => $this->local($uykuBasi),
             'uyku_sonu' => $this->local($uykuSonu),
             // Carbon ondalik dondurdugu icin acikca yuvarlanir; "0.0625 dk" olmasin.

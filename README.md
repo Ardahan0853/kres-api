@@ -72,6 +72,7 @@ Hepsi `/api/v1` altında. `auth/login` dışındakiler Sanctum korumalı.
 | POST | `auth/login` | `email`, `password`, `device_name` → `{token, user}` |
 | POST | `auth/logout` | Yalnızca o isteğin token'ını siler → 204 |
 | GET | `me` | `{data: {...user}}` |
+| POST | `auth/session-log` | Giriş kaydı (denetim izi). 201 yeni / 200 zaten var |
 | GET | `classrooms` | Öğretmenin atandığı sınıflar; admin ise kurumun tamamı. `day_sent_at` içerir |
 | POST | `classrooms/{classroom}/day-send` | Sınıfın gününü gönderir |
 | GET | `classrooms/{classroom}/children` | Atanmamış öğretmene 403, `photo_consent` içerir |
@@ -207,13 +208,14 @@ Mobil istemcinin gönderdiği şekiller (sözleşme belgesi, doğrulanmaz):
 
 ```
 attendance  {"present": true}                                  false = gelmedi
-meal        {"meal": "breakfast"|"lunch",
+meal        {"meal": "breakfast"|"lunch"|"snack",
              "amount": "all"|"some"|"none"}                    all=Yedi, some=Az yedi, none=Yemedi
 nap         {"started_at": "ISO", "ended_at": "ISO"|null}
 toilet      {"kind": "toilet"|"diaper"}
 ```
 
-- Öğün yalnızca kahvaltı ve öğledir, `snack` yoktur.
+- Üç öğün vardır: `breakfast` (kahvaltı), `lunch` (öğle), `snack` (**ikindi**).
+  Veli sayfası üçünü de ayrı satırda gösterir.
 - Uyku **tek kayıttır**: "Uyudu" kaydı açar, "Uyandı" aynı id'ye `ended_at`
   ekler. Çocuk ikinci kez uyursa yeni id ile yeni kayıt açılır.
 - Tuvalet/bez her dokunuşta ayrı kayıttır; günlük sayaç istemcide üretilir.
@@ -228,6 +230,30 @@ bu yüzden art arda yapılan işaretlemeler genelde tek `batch` isteğiyle gelir
 > saat dilimi UTC değilse `timestamptz` kolonlara yazılan saatler makinenin
 > yerel dilimine göre kayar (bu makinede 3 saat). `recorded_at` için bu kayma
 > kabul edilemez.
+
+## Giriş kaydı
+
+Mobil uygulamada çevrimdışı giriş var: ağ yokken öğretmen, cihazda saklanan
+parola özetiyle içeri girebiliyor. Bu giriş sunucudan geçmediği için bağlantı
+gelince ayrıca bildirilir.
+
+```
+POST auth/session-log   {"id": "<uuid v7>", "started_at": "ISO", "offline": true}
+```
+
+`started_at` girişin **yapıldığı** andır: 09:00'da çevrimdışı giren öğretmen
+11:00'da bağlansa da 09:00 görünür. Sunucunun kaydı aldığı an `created_at`'te
+ayrıca durur. `id` istemciden gelir ve idempotency anahtarıdır.
+
+Aynı id başka bir öğretmene aitse **409** döner ve kayıt gösterilmez —
+dönmek onun giriş saatini sızdırırdı.
+
+> **Bu tablo kanıt değildir.** `started_at` ve `offline` istemcinin beyanıdır;
+> çevrimdışı giriş sunucudan geçmediği için doğrulanabilecek bir şey yoktur.
+> Denetim izi olarak okunabilir, kritik bir karara dayanak yapılamaz.
+
+`offline` alanı bilerek gevşek doğrulanır (gelmezse `false`): katı bir kural
+yüzünden 422'ye takılan istek istemcinin kuyruğunda sonsuza kadar dönerdi.
 
 ## Fotoğraf izni
 

@@ -14,6 +14,7 @@ Route::prefix('v1')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
+        Route::post('auth/session-log', [AuthController::class, 'sessionLog']);
 
         Route::get('classrooms', [ClassroomController::class, 'index']);
         Route::get('classrooms/{classroom}/children', [ClassroomChildController::class, 'index']);
