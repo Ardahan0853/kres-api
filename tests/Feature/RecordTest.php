@@ -646,4 +646,29 @@ class RecordTest extends TestCase
         $this->postJson('/api/v1/records/batch', ['records' => [$this->payload()]])
             ->assertStatus(401);
     }
+
+    public function test_nesne_olmayan_eleman_yanindaki_kayitlari_dusurmez(): void
+    {
+        Sanctum::actingAs($this->ayse);
+
+        $saglam = $this->payload();
+
+        $response = $this->postJson('/api/v1/records/batch', [
+            'records' => [
+                'bozuk satir',
+                $saglam,
+            ],
+        ]);
+
+        // Zarf gecerli: tek bozuk eleman yanindaki saglam kaydi dusurmez.
+        $response->assertStatus(200)
+            ->assertJsonPath('results.0.index', 0)
+            ->assertJsonPath('results.0.status', 422)
+            ->assertJsonPath('results.0.result', 'invalid')
+            ->assertJsonPath('results.0.id', null)
+            ->assertJsonPath('results.1.status', 201)
+            ->assertJsonPath('results.1.result', 'created');
+
+        $this->assertDatabaseHas('records', ['id' => $saglam['id']]);
+    }
 }

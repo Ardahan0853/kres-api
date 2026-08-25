@@ -44,6 +44,9 @@ git status --short                     # kaydedilmemiş değişiklik var mı
 ```
 
 ```
+073aa8a  sdaa
+         day-send yeniden gönderim (resend): 9 dosya, +374 satır
+9f30689  SESSION_NOTES.md'yi depoya al
 5cdf0a9  Giriş kaydı ucu ve üçüncü öğün (ikindi)
          session_logs + snack: 11 dosya, +411 satır
 ed28681  sad
@@ -58,9 +61,10 @@ uyarıları artık geçersiz.
 
 Bilinmesi gerekenler:
 
-- **İlk üç commit'in mesajı anlamsız** (`sad`). O döneme ait "neyin ne zaman
-  değiştiği" bu belgeden ve `--stat` çıktısından çıkarılır. `5cdf0a9`'dan
-  itibaren mesajlar gerekçeyi de yazıyor.
+- **Bazı commit mesajları anlamsız** (`sad`, `sdaa`) ve bu düzenli değil:
+  `5cdf0a9` ile `9f30689` gerekçeyi yazıyor, `073aa8a` yazmıyor. Yani commit
+  geçmişine "neden" için güvenilemez; o bilgi bu belgede ve README'de durur.
+  `073aa8a`'nın gerekçesi bölüm 3'teki "Yeniden gönderim" başlığındadır.
 - **`SESSION_NOTES.md` (bu dosya) artık commit'leniyor.** `kres-mobile`
   tarafında hâlâ commit'lenmemiş olabilir; kontrol edin.
 - `.env` izlenmiyor (doğru — `DEV_PARENT_PHONE` ve DB şifresi orada).
@@ -193,6 +197,43 @@ sayılır ve testlerin göremediği bir motor farkı daha eklerdi.
 Bedeli bilerek kabul edildi: yeniden gönderim bağlantıları döndürür, velinin
 elindeki eski adres ölür (ham token saklanmadığı için "eskisini tekrar
 gönder" yok).
+
+### Kayıt ucunda 422'nin geçici hâli yok
+
+Mobil taraf "422 alan kayıt sonsuza kadar kuyrukta dönüyor" diye sordu ve
+kalıcı/geçici ayrımı isteyip istemediğimizi sordu. `RecordController` ve
+`StoreRecordRequest`'teki bütün çıkışlar sayıldı: **dokuz tane var, dokuzu da
+kalıcı** (gövde şekli 4, bilinmeyen sınıf/çocuk 2, değişmezlik ihlali 3).
+
+Sebep basit: kuyruktaki kaydın gövdesi bir daha değişmez, aynı gövde bin kez
+de gitse aynı cevabı alır. Fotoğraftaki `upload_incomplete`'in geçici olması
+yükleme ayrı bir adım olduğu içindi; kayıt yazma tek adım.
+
+`reason` kodları (`invalid_body`, `unknown_classroom`, `not_in_classroom`,
+`immutable_record`) önerildi ama **bir hata düzeltmiyor** — bugün ayrım zaten
+"hepsi kalıcı". Yalnızca öğretmene gösterilen gerekçeyi düzeltir. Kullanıcı
+kararı bekleniyor. Eklenirse sözleşme maddesi şart: `reason` yoksa ya da
+tanınmıyorsa 422 KALICI sayılır, yoksa ileride geçici bir kod eklendiğinde
+eski istemciler yanlış tarafa düşer.
+
+### `records.*` kuralı zarftan çıkarıldı
+
+`records/batch` zarfında `'records.*' => ['array']` kuralı vardı ve nesne
+olmayan tek bir eleman tüm isteği 422 yapıyordu — yani zarfın kendi
+açıklamasının ("tek bozuk kayıt yüzünden diğer 49'u reddetme") tam olarak
+engellemek istediği şey. Kural çıkarıldı, kontrol döngünün içine alındı;
+bozuk eleman artık kendi satırında `invalid` dönüyor.
+
+Zarf düzeyinde kalan tek sınır kayıt sayısı (200). O 422 bilerek duruyor:
+tekrar denenerek değil, listeyi bölerek geçilir — aynı zarf bin kez de gitse
+aynı cevabı alır.
+
+**Ölçüldü: bugün bu sınıra dayanılmıyor.** Mobil tarafta `BATCH_SIZE = 50` ve
+bu sayı doğrudan SQL `LIMIT`'ine gidiyor, yani 5000 kayıtlık birikim 100 ayrı
+istekte çıkıyor. Sınır aşılamadığı için mobil taraf zarf 422'sini kalıcı
+saymadı (ulaşılamayan dalı sertleştirmek 50 geçerli kaydı birden engelleme
+riski taşıyordu). Biri o sabiti yükseltmek isterse gerekçe mobil taraftaki
+sabitin başında yazılı.
 
 ### Boş gün sunucuda reddedilmedi
 

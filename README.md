@@ -144,6 +144,29 @@ koduna değil, kendi id'sinin satırına bakmalıdır:
 ]}
 ```
 
+Nesne olmayan bir eleman da **kendi satırında** reddedilir (`id` doğrulanamadığı
+için `null` gelir, eşleşme `index` ile yapılır). Önce bu kural zarftaydı ve
+bozuk tek bir kuyruk satırı tüm isteği 422 yapıyordu — yani yukarıdaki
+gerekçenin tam olarak engellemek istediği şey.
+
+Zarf düzeyinde kalan tek sınır kayıt **sayısıdır**: 200 üstü liste 422 alır.
+Bu 422 tekrar denenerek değil, **listeyi bölerek** geçilir — aynı zarf bin kez
+de gitse aynı cevabı alır. İstemci kuyruğu 200'lük parçalara bölmelidir.
+
+### 422 kalıcıdır
+
+Kayıt ucunda 422'nin geçici hâli **yoktur**; dokuz çıkışın dokuzu da kalıcıdır
+(gövde şekli, bilinmeyen sınıf/çocuk, kaydın sınıf/çocuk/tür değişmezliği).
+Aynı gövde tekrar gönderilerek düzelen bir 422 yoktur, çünkü kuyruktaki kaydın
+gövdesi bir daha değişmez.
+
+Fotoğraf ucundaki `upload_incomplete`'in geçici olmasının sebebi burada yoktur:
+orada yükleme ayrı bir adımdır ve istemci 1. adımdan tekrar deneyerek durumu
+düzeltebilir. Kayıt yazma tek adımdır.
+
+> İstemci kayıt 422'sini **kalıcı ret** saymalıdır. Sonsuza kadar tekrar
+> denemek düzelmeyecek bir hatayı sessizce döndürmek olur.
+
 ### Kayıt silme
 
 Öğretmen 5 saniyelik geri alma penceresi kaçtıktan sonra da yanlış girdiği

@@ -70,6 +70,21 @@ class RecordController extends Controller
         $results = [];
 
         foreach ($request->validated()['records'] as $index => $input) {
+            // Nesne olmayan eleman KENDI satirinda reddedilir. Zarf kuralina
+            // baglasaydik bozuk tek bir kuyruk satiri, yanindaki 49 saglam
+            // kaydin da sonsuza kadar reddedilmesine yol acardi.
+            if (! is_array($input)) {
+                $results[] = [
+                    'id' => null,
+                    'index' => $index,
+                    'status' => 422,
+                    'result' => 'invalid',
+                    'message' => 'Her kayıt bir nesne olmalı.',
+                ];
+
+                continue;
+            }
+
             $validator = Validator::make(
                 $input,
                 StoreRecordRequest::recordRules(),
